@@ -1,0 +1,76 @@
+# Remediate-EntraHybridJoinPending.ps1
+# Remediation script for Intune
+# Removes Entra hybrid join when detected as needed by the detection script
+
+# Set up logging
+$logFile = "$env:ProgramData\Microsoft\IntuneManagementExtension\Logs\EntraHybridJoinRemediation.log"
+
+function Write-Log {
+    param (
+        [Parameter(Mandatory = $true)]
+        [string]$Message
+    )
+    
+    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    "$timestamp - $Message" | Out-File -FilePath $logFile -Append -Force
+}
+
+try {
+    Write-Log "=== Remediation Script Started ==="
+    Write-Log "Computer Name: $env:COMPUTERNAME"
+    Write-Log "Current User Context: $([System.Security.Principal.WindowsIdentity]::GetCurrent().Name)"
+    
+    # Check if running with administrator privileges
+    $currentPrincipal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
+    $isAdmin = $currentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    
+    Write-Log "Running with administrator privileges: $isAdmin"
+    
+    if (-not $isAdmin) {
+        Write-Log "ERROR: Script is not running with administrator privileges. This is required for dsregcmd /leave."
+        exit 1
+    }
+    
+    # Execute dsregcmd /leave
+    Write-Log "Executing dsregcmd /leave"
+    try {
+        $leaveOutput = dsregcmd /leave 2>&1
+        $leaveString = $leaveOutput | Out-String
+        Write-Log "dsregcmd /leave output:"
+        Write-Log $leaveString
+    }
+    catch {
+        Write-Log "Error executing dsregcmd /leave: $_"
+        exit 1
+    }
+    
+    # Verify the leave was successful
+    Write-Log "Waiting 10 seconds before verification..."
+    Start-Sleep -Seconds 10  # Give it a moment to process
+    
+    Write-Log "Verifying leave operation with dsregcmd /status"
+    $dsregOutputAfter = dsregcmd /status 2>&1
+    $dsregStringAfter = $dsregOutputAfter | Out-String
+    
+    # Check if still Azure AD joined
+    $isAzureAdJoinedAfter = $dsregStringAfter -match "AzureAdJoined\s+:\s+YES"
+    $isPendingRegistrationAfter = $dsregStringAfter -match "Registered\s+:\s+PENDING"
+    
+    Write-Log "Post-remediation status: AzureAdJoined=$isAzureAdJoinedAfter, PendingRegistration=$isPendingRegistrationAfter"
+    
+    if (-not $isAzureAdJoinedAfter -or -not $isPendingRegistrationAfter) {
+        Write-Log "Successfully remediated device join status"
+        Write-Log "=== Remediation Script Completed Successfully ==="
+        exit 0
+    } else {
+        Write-Log "WARNING: Failed to remediate device join status"
+        Write-Log "=== Remediation Script Completed with Warning ==="
+        exit 1
+    }
+} catch {
+    Write-Log "ERROR: Unhandled exception occurred: $_"
+    Write-Log "Exception details: $($_.Exception)"
+    Write-Log "Stack trace: $($_.ScriptStackTrace)"
+    Write-Log "=== Remediation Script Failed ==="
+    exit 1
+}

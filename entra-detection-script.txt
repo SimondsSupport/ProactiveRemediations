@@ -1,0 +1,54 @@
+# Detect-EntraHybridJoinPending.ps1
+# Detection script for Intune remediation
+# Checks if the device is Entra hybrid joined AND has a PENDING registration status
+
+# Set up logging
+$logFile = "$env:ProgramData\Microsoft\IntuneManagementExtension\Logs\EntraHybridJoinDetection.log"
+
+function Write-Log {
+    param (
+        [Parameter(Mandatory = $true)]
+        [string]$Message
+    )
+    
+    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    "$timestamp - $Message" | Out-File -FilePath $logFile -Append -Force
+}
+
+try {
+    Write-Log "=== Detection Script Started ==="
+    Write-Log "Computer Name: $env:COMPUTERNAME"
+    
+    # Check device join status
+    Write-Log "Checking device join status using dsregcmd /status"
+    $dsregOutput = dsregcmd /status 2>&1
+    $dsregString = $dsregOutput | Out-String
+    
+    # Look for hybrid join indicators and pending registration status
+    $isAzureAdJoined = $dsregString -match "AzureAdJoined\s+:\s+YES"
+    $isDomainJoined = $dsregString -match "DomainJoined\s+:\s+YES"
+    $isPendingRegistration = $dsregString -match "Registered\s+:\s+PENDING"
+    
+    Write-Log "Join status: AzureAdJoined=$isAzureAdJoined, DomainJoined=$isDomainJoined, PendingRegistration=$isPendingRegistration"
+    
+    # Return exit code 1 (non-compliant) if we need remediation
+    if ($isAzureAdJoined -and $isDomainJoined -and $isPendingRegistration) {
+        Write-Log "DETECTION: Device is Entra hybrid joined with PENDING registration status. Remediation needed."
+        Write-Log "=== Detection Script Completed: Remediation Required ==="
+        exit 1  # Non-compliant, remediation needed
+    } else {
+        if ($isAzureAdJoined -and $isDomainJoined) {
+            Write-Log "DETECTION: Device is Entra hybrid joined but registration status is not PENDING. No remediation needed."
+        } else {
+            Write-Log "DETECTION: Device is not Entra hybrid joined. No remediation needed."
+        }
+        Write-Log "=== Detection Script Completed: No Remediation Required ==="
+        exit 0  # Compliant, no remediation needed
+    }
+} catch {
+    Write-Log "ERROR: Unhandled exception occurred: $_"
+    Write-Log "Exception details: $($_.Exception)"
+    Write-Log "Stack trace: $($_.ScriptStackTrace)"
+    Write-Log "=== Detection Script Failed ==="
+    exit 0  # Return compliant to avoid unnecessary remediation in case of script errors
+}
